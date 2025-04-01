@@ -295,70 +295,69 @@ proc check_game_over(state: GameStateRef): (int, Option[char]) =
 #     return best_move;
 # }
 
-# /* Backpropagation function.
-#  * The only difference here from vanilla backprop is that we have
-#  * a 'reward_scaling' argument that makes the output error more/less
-#  * dramatic, so that we can adjust the weights proportionally to the
-#  * reward we want to provide. */
-# void backprop(NeuralNetwork *nn, float *target_probs, float learning_rate, float reward_scaling) {
-#     float output_deltas[NN_OUTPUT_SIZE];
-#     float hidden_deltas[NN_HIDDEN_SIZE];
+# Backpropagation function.
+# The only difference here from vanilla backprop is that we have
+# a 'reward_scaling' argument that makes the output error more/less
+# dramatic, so that we can adjust the weights proportionally to the
+# reward we want to provide.
 
-#     /* === STEP 1: Compute deltas === */
+proc backprop(
+  nn: NeuralNetworkRef,
+  target_probs: array[NN_OUTPUT_SIZE, float],
+  learning_rate: float,
+  reward_scaling: float
+) =
+  var output_deltas: array[NN_OUTPUT_SIZE, float]
+  var hidden_deltas: array[NN_OUTPUT_SIZE, float]
 
-#     /* Calculate output layer deltas:
-#      * Note what's going on here: we are technically using softmax
-#      * as output function and cross entropy as loss, but we never use
-#      * cross entropy in practice since we check the progresses in terms
-#      * of winning the game.
-#      *
-#      * Still calculating the deltas in the output as:
-#      *
-#      *      output[i] - target[i]
-#      *
-#      * Is exactly what happens if you derivate the deltas with
-#      * softmax and cross entropy.
-#      *
-#      * LEARNING OPPORTUNITY: This is a well established and fundamental
-#      * result in neural networks, you may want to read more about it. */
-#     for (int i = 0; i < NN_OUTPUT_SIZE; i++) {
-#         output_deltas[i] =
-#             (nn->outputs[i] - target_probs[i]) * fabsf(reward_scaling);
-#     }
+  # === STEP 1: Compute deltas === */
 
-#     // Backpropagate error to hidden layer.
-#     for (int i = 0; i < NN_HIDDEN_SIZE; i++) {
-#         float error = 0;
-#         for (int j = 0; j < NN_OUTPUT_SIZE; j++) {
-#             error += output_deltas[j] * nn->weights_ho[i * NN_OUTPUT_SIZE + j];
-#         }
-#         hidden_deltas[i] = error * relu_derivative(nn->hidden[i]);
-#     }
+  # Calculate output layer deltas:
+  # Note what's going on here: we are technically using softmax
+  # as output function and cross entropy as loss, but we never use
+  # cross entropy in practice since we check the progresses in terms
+  # of winning the game.
+  #
+  # Still calculating the deltas in the output as:
+  #
+  #     output[i] - target[i]
+  #
+  # Is exactly what happens if you derivate the deltas with
+  # softmax and cross entropy.
+  #
+  # LEARNING OPPORTUNITY: This is a well established and fundamental
+  # result in neural networks, you may want to read more about it. */
 
-#     /* === STEP 2: Weights updating === */
+  for i in 0..<NN_OUTPUT_SIZE:
+    output_deltas[i] = (nn.outputs[i] - target_probs[i]) * abs(reward_scaling)
 
-#     // Output layer weights and biases.
-#     for (int i = 0; i < NN_HIDDEN_SIZE; i++) {
-#         for (int j = 0; j < NN_OUTPUT_SIZE; j++) {
-#             nn->weights_ho[i * NN_OUTPUT_SIZE + j] -=
-#                 learning_rate * output_deltas[j] * nn->hidden[i];
-#         }
-#     }
-#     for (int j = 0; j < NN_OUTPUT_SIZE; j++) {
-#         nn->biases_o[j] -= learning_rate * output_deltas[j];
-#     }
+  for i in 0..<NN_HIDDEN_SIZE:
+    var error = 0.0
 
-#     // Hidden layer weights and biases.
-#     for (int i = 0; i < NN_INPUT_SIZE; i++) {
-#         for (int j = 0; j < NN_HIDDEN_SIZE; j++) {
-#             nn->weights_ih[i * NN_HIDDEN_SIZE + j] -=
-#                 learning_rate * hidden_deltas[j] * nn->inputs[i];
-#         }
-#     }
-#     for (int j = 0; j < NN_HIDDEN_SIZE; j++) {
-#         nn->biases_h[j] -= learning_rate * hidden_deltas[j];
-#     }
-# }
+    for j in 0..<NN_OUTPUT_SIZE:
+      error += output_deltas[j] * nn.weights_ho[i * NN_OUTPUT_SIZE + j]
+
+    hidden_deltas[i] = error * relu_derivative(nn.hiddens[i])
+
+  # === STEP 2: Weights updating ===
+
+  # Output layer weights and biases.
+
+  for i in 0..<NN_HIDDEN_SIZE:
+    for j in 0..<NN_OUTPUT_SIZE:
+      nn.weights_ho[i * NN_OUTPUT_SIZE + j] -= learning_rate * output_deltas[j] * nn.hiddens[i]
+
+  for j in 0..<NN_OUTPUT_SIZE:
+    nn.biases_o[j] -= learning_rate * output_deltas[j]
+
+  # Hidden layer weights and biases.
+
+  for i in 0..<NN_INPUT_SIZE:
+    for j in 0..<NN_HIDDEN_SIZE:
+      nn.weights_ih[i * NN_HIDDEN_SIZE + j] -= learning_rate * hidden_deltas[j] * nn.inputs[i]
+
+  for j in 0..<NN_HIDDEN_SIZE:
+    nn.biases_h[j] -= learning_rate * hidden_deltas[j]
 
 # /* Train the neural network based on game outcome.
 #  *
