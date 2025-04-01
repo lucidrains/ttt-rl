@@ -6,7 +6,8 @@ import std / [
   strutils,
   strformat,
   random,
-  options
+  options,
+  terminal
 ]
 
 randomize()
@@ -199,14 +200,14 @@ proc board_to_inputs(state: GameStateRef, inputs: var array[NN_INPUT_SIZE, float
 # Check if the game is over (win or tie).
 # Very brutal but fast enough.
 
-proc check_game_over(state: GameStateRef): (int, Option[char]) =
+proc check_game_over(state: GameStateRef): (bool, Option[char]) =
   for i in 0..<3:
     if (
       state.board[i*3] != '.' and
       state.board[i*3] == state.board[i*3+1] and
       state.board[i*3+1] == state.board[i*3+2]
     ):
-      return (1, some(state.board[i*3]))
+      return (true, some(state.board[i*3]))
 
   # Check diagonals.
 
@@ -216,7 +217,7 @@ proc check_game_over(state: GameStateRef): (int, Option[char]) =
       state.board[i] == state.board[i+3] and
       state.board[i+3] == state.board[i+6]
     ):
-      return (1, some(state.board[i]))
+      return (true, some(state.board[i]))
 
   # Check for tie (no free tiles left).
 
@@ -226,9 +227,9 @@ proc check_game_over(state: GameStateRef): (int, Option[char]) =
       empty_tiles.inc
 
   if empty_tiles == 0:
-    return (1, some('T'))
+    return (true, some('T'))
 
-  return (0, none(char)) # Game Continues
+  return (false, none(char)) # Game Continues
 
 # Get the best move for the computer using the neural network.
 # Note that there is no complex sampling at all, we just get
@@ -286,14 +287,14 @@ proc get_computer_move(
 
       echo "\n"
 
-  # Sum of probabilities should be 1.0, hopefully.
-  # Just debugging.
+    # Sum of probabilities should be 1.0, hopefully.
+    # Just debugging.
 
-  var total_prob = 0.0
-  for i in 0..<9:
-    total_prob += nn.outputs[i]
+    var total_prob = 0.0
+    for i in 0..<9:
+      total_prob += nn.outputs[i]
 
-  echo &"Sum of all probabilities: {total_prob}"
+    echo &"Sum of all probabilities: {total_prob}"
 
   best_move
 
@@ -310,7 +311,7 @@ proc backprop(
   reward_scaling: float
 ) =
   var output_deltas: array[NN_OUTPUT_SIZE, float]
-  var hidden_deltas: array[NN_OUTPUT_SIZE, float]
+  var hidden_deltas: array[NN_HIDDEN_SIZE, float]
 
   # === STEP 1: Compute deltas === */
 
@@ -462,189 +463,207 @@ proc learn_from_game(
         ):
           target_probs[i] = other_prob
 
-      nn.backprop(target_probs, LEARNING_RATE, scaled_reward)
+    nn.backprop(target_probs, LEARNING_RATE, scaled_reward)
 
-# /* Play one game of Tic Tac Toe against the neural network. */
-# void play_game(NeuralNetwork *nn) {
-#     GameState state;
-#     char winner;
-#     int move_history[9]; // Maximum 9 moves in a game.
-#     int num_moves = 0;
+# Play one game of Tic Tac Toe against the neural network.
 
-#     init_game(&state);
+proc play_game(nn: NeuralNetworkRef) =
+  let state = GameStateRef()
 
-#     printf("Welcome to Tic Tac Toe! You are X, the computer is O.\n");
-#     printf("Enter positions as numbers from 0 to 8 (see picture).\n");
+  var
+    has_won: bool
+    winner: Option[char]
+    move_history: array[9, int]
+    num_moves: int
 
-#     while (!check_game_over(&state, &winner)) {
-#         display_board(&state);
+  state.init_game()
 
-#         if (state.current_player == 0) {
-#             // Human turn.
-#             int move;
-#             char movec;
-#             printf("Your move (0-8): ");
-#             scanf(" %c", &movec);
-#             move = movec-'0'; // Turn character into number.
+  echo "Welcome to Tic Tac Toe! You are X, the computer is O.\n"
+  echo "Enter positions as numbers from 0 to 8 (see picture).\n"
 
-#             // Check if move is valid.
-#             if (move < 0 || move > 8 || state.board[move] != '.') {
-#                 printf("Invalid move! Try again.\n");
-#                 continue;
-#             }
+  while ((has_won, winner) = state.check_game_over(); not has_won):
+    state.display_board()
 
-#             state.board[move] = 'X';
-#             move_history[num_moves++] = move;
-#         } else {
-#             // Computer's turn
-#             printf("Computer's move:\n");
-#             int move = get_computer_move(&state, nn, 1);
-#             state.board[move] = 'O';
-#             printf("Computer placed O at position %d\n", move);
-#             move_history[num_moves++] = move;
-#         }
+    if state.current_player == 0:
+      # Human turn.
+      var
+        move: int
+        movec: char
 
-#         state.current_player = !state.current_player;
-#     }
+      echo "Your move (0-8): "
 
-#     display_board(&state);
+      movec = getch()
+      move = movec.ord - '0'.ord
 
-#     if (winner == 'X') {
-#         printf("You win!\n");
-#     } else if (winner == 'O') {
-#         printf("Computer wins!\n");
-#     } else {
-#         printf("It's a tie!\n");
-#     }
+      if (
+        (move < 0) or
+        (move > 8) or
+        (state.board[move] != '.')
+      ):
+        echo "Invalid move! Try again.\n"
+        continue
 
-#     // Learn from this game
-#     learn_from_game(nn, move_history, num_moves, 1, winner);
-# }
+      state.board[move] = 'X'
 
-# /* Get a random valid move, this is used for training
-#  * against a random opponent. Note: this function will loop forever
-#  * if the board is full, but here we want simple code. */
-# int get_random_move(GameState *state) {
-#     while(1) {
-#         int move = rand() % 9;
-#         if (state->board[move] != '.') continue;
-#         return move;
-#     }
-# }
+      move_history[num_moves] = move
+      num_moves.inc
 
-# /* Play a game against random moves and learn from it.
-#  *
-#  * This is a very simple Montecarlo Method applied to reinforcement
-#  * learning:
-#  *
-#  * 1. We play a complete random game (episode).
-#  * 2. We determine the reward based on the outcome of the game.
-#  * 3. We update the neural network in order to maximize future rewards.
-#  *
-#  * LEARNING OPPORTUNITY: while the code uses some Montecarlo-alike
-#  * technique, important results were recently obtained using
-#  * Montecarlo Tree Search (MCTS), where a tree structure repesents
-#  * potential future game states that are explored according to
-#  * some selection: you may want to learn about it. */
-# char play_random_game(NeuralNetwork *nn, int *move_history, int *num_moves) {
-#     GameState state;
-#     char winner = 0;
-#     *num_moves = 0;
+    else:
+      # Computer's turn
 
-#     init_game(&state);
+      echo "Computer's move"
+      let move = state.get_computer_move(nn, true)
+      state.board[move] = 'O'
+      echo &"Computer placed 0 at position {move}\n"
 
-#     while (!check_game_over(&state, &winner)) {
-#         int move;
+      move_history[num_moves] = move
+      num_moves.inc
 
-#         if (state.current_player == 0) {  // Random player's turn (X)
-#             move = get_random_move(&state);
-#         } else {  // Neural network's turn (O)
-#             move = get_computer_move(&state, nn, 0);
-#         }
+    state.current_player = state.current_player xor 1
 
-#         /* Make the move and store it: we need the moves sequence
-#          * during the learning stage. */
-#         char symbol = (state.current_player == 0) ? 'X' : 'O';
-#         state.board[move] = symbol;
-#         move_history[(*num_moves)++] = move;
+  state.display_board()
 
-#         // Switch player.
-#         state.current_player = !state.current_player;
-#     }
+  let winning_char = winner.get
 
-#     // Learn from this game - neural network is 'O' (even-numbered moves).
-#     learn_from_game(nn, move_history, *num_moves, 1, winner);
-#     return winner;
-# }
+  if (winning_char == 'X'):
+    echo "You win!\n"
+  elif (winning_char == 'O'):
+    echo "Compuer wins!\n"
+  else:
+    echo "It's a tie!\n"
 
-# /* Train the neural network against random moves. */
-# void train_against_random(NeuralNetwork *nn, int num_games) {
-#     int move_history[9];
-#     int num_moves;
-#     int wins = 0, losses = 0, ties = 0;
+  nn.learn_from_game(move_history, num_moves, true, winning_char)
 
-#     printf("Training neural network against %d random games...\n", num_games);
+# Get a random valid move, this is used for training
+# against a random opponent. Note: this function will loop forever
+# if the board is full, but here we want simple code.
 
-#     int played_games = 0;
-#     for (int i = 0; i < num_games; i++) {
-#         char winner = play_random_game(nn, move_history, &num_moves);
-#         played_games++;
+proc random_move(state: GameStateRef): int =
+  while true:
+    let move = rand(8)
 
-#         // Accumulate statistics that are provided to the user (it's fun).
-#         if (winner == 'O') {
-#             wins++; // Neural network won.
-#         } else if (winner == 'X') {
-#             losses++; // Random player won.
-#         } else {
-#             ties++; // Tie.
-#         }
+    if (state.board[move] != '.'):
+      continue
 
-#         // Show progress every many games to avoid flooding the stdout.
-#         if ((i + 1) % 10add_one(x, y) wins, (float)wins * 100 / played_games,
-#                   losses, (float)losses * 100 / played_games,
-#                   ties, (float)ties * 100 / played_games);
-#             played_games = 0;
-#             wins = 0;
-#             losses = 0;
-#             ties = 0;
-#         }
-#     }
-#     printf("\nTraining complete!\n");
-# }
+    return move
 
-# int main(int argc, char **argv) {
-#     int random_games = 150000; // Fast and enough to play in a decent way.
+# Play a game against random moves and learn from it.
+#
+# This is a very simple Montecarlo Method applied to reinforcement
+# learning:
+#
+# 1. We play a complete random game (episode).
+# 2. We determine the reward based on the outcome of the game.
+# 3. We update the neural network in order to maximize future rewards.
+#
+# LEARNING OPPORTUNITY: while the code uses some Montecarlo-alike
+# technique, important results were recently obtained using
+# Montecarlo Tree Search (MCTS), where a tree structure repesents
+# potential future game states that are explored according to
+# some selection: you may want to learn about it.
 
-#     if (argc > 1) random_games = atoi(argv[1]);
-#     srand(time(NULL));
+proc play_random_game(
+  nn: NeuralNetworkRef,
+  move_history: var array[9, int],
+  num_moves: int
+): char =
 
-#     // Initialize neural network.
-#     NeuralNetwork nn;
-#     init_neural_network(&nn);
+  let state = GameStateRef()
 
-#     // Train against random moves.
-#     if (random_games > 0) train_against_random(&nn, random_games);
+  var
+    has_won: bool
+    winner: Option[char]
+    move: int
+    num_moves = 0
 
-#     // Play game with human and learn more.
-#     while(1) {
-#         char play_again;
-#         play_game(&nn);
+  state.init_game()
 
-#         printf("Play again? (y/n): ");
-#         scanf(" %c", &play_again);
-#         if (play_again != 'y' && play_again != 'Y') break;
-#     }
-#     return 0;
-# }
+  while ((has_won, winner) = state.check_game_over(); not has_won):
+
+    move = if (state.current_player == 0):
+      state.random_move()
+    else:
+      state.get_computer_move(nn, false)
+
+    let symbol = if (state.current_player == 0): 'X' else: 'O'
+
+    state.board[move] = symbol
+
+    move_history[num_moves] = move
+    num_moves.inc
+
+    state.current_player = state.current_player xor 1
+
+  let winner_char = winner.get
+
+  nn.learn_from_game(move_history, num_moves, true, winner_char)
+  return winner_char
+
+# Train the neural network against random moves.
+
+proc train_against_random(
+  nn : NeuralNetworkRef,
+  num_games: int
+) =
+  var
+    move_history: array[9, int]
+    num_moves: int
+    wins = 0
+    losses = 0
+    ties = 0
+
+  echo &"Training neural network against {num_games} random games...\n"
+
+  var played_games = 0
+
+  for i in 0..<num_games:
+    let winner = nn.play_random_game(move_history, num_moves)
+
+    played_games.inc
+
+    # Accumulate statistics that are provided to the user (it's fun).
+
+    if (winner == 'O'):
+      wins.inc
+    elif (winner == 'X'):
+      losses.inc
+    else:
+      ties.inc
+
+    if (((i + 1) mod 10000) == 0):
+      echo &"Games: {i + 1}, Wins: {wins} ({wins.float * 100 / played_games.float}), Losses: {losses} ({losses.float * 100 / played_games.float}), Ties: {ties} ({ties.float * 100 / played_games.float})"
+
+      played_games = 0
+      wins = 0
+      losses = 0
+      ties = 0
+
+  echo "\nTraining complete!\n"
 
 when is_main_module:
-  var random_games = 150_000
+  var random_games = 150_000 # Fast and enough to play in a decent way.
 
   let args = command_line_params()
 
   if args.len > 0:
     random_games = parse_int(args[0])
 
+  # Initialize neural network.
+
   let nn = NeuralNetworkRef()
 
   nn.init_neural_network()
+
+  if random_games > 0:
+    nn.train_against_random(random_games)
+
+  var play_again: char
+
+  while true:
+    nn.play_game()
+
+    echo "Play again? (y/n): "
+    let input_char = getch()
+
+    if (input_char != 'y'  and play_again != 'Y'):
+      break
