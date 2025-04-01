@@ -230,70 +230,72 @@ proc check_game_over(state: GameStateRef): (int, Option[char]) =
 
   return (0, none(char)) # Game Continues
 
-# /* Get the best move for the computer using the neural network.
-#  * Note that there is no complex sampling at all, we just get
-#  * the output with the highest value THAT has an empty tile. */
-# int get_computer_move(GameState *state, NeuralNetwork *nn, int display_probs) {
-#     float inputs[NN_INPUT_SIZE];
+# Get the best move for the computer using the neural network.
+# Note that there is no complex sampling at all, we just get
+# the output with the highest value THAT has an empty tile.
 
-#     board_to_inputs(state, inputs);
-#     forward_pass(nn, inputs);
+proc get_computer_move(
+  state: GameStateRef,
+  nn: NeuralNetworkRef,
+  display_probs: bool
+): int =
 
-#     // Find the highest probability value and best legal move.
-#     float highest_prob = -1.0f;
-#     int highest_prob_idx = -1;
-#     int best_move = -1;
-#     float best_legal_prob = -1.0f;
+  var inputs: array[NN_INPUT_SIZE, float]
 
-#     for (int i = 0; i < 9; i++) {
-#         // Track highest probability overall.
-#         if (nn->outputs[i] > highest_prob) {
-#             highest_prob = nn->outputs[i];
-#             highest_prob_idx = i;
-#         }
+  state.board_to_inputs(inputs)
 
-#         // Track best legal move.
-#         if (state->board[i] == '.' &&
-#             (best_move == -1 || nn->outputs[i] > best_legal_prob))
-#         {
-#             best_move = i;
-#             best_legal_prob = nn->outputs[i];
-#         }
-#     }
+  # Find the highest probability value and best legal move.
 
-#     // That's just for debugging. It's interesting to show to user
-#     // in the first iterations of the game, since you can see how initially
-#     // the net picks illegal moves as best, and so forth.
-#     if (display_probs) {
-#         printf("Neural network move probabilities:\n");
-#         for (int row = 0; row < 3; row++) {
-#             for (int col = 0; col < 3; col++) {
-#                 int pos = row * 3 + col;
+  var
+    highest_prob = -1.0
+    highest_prob_idx = -1
+    best_move = -1
+    best_legal_prob = -1.0
 
-#                 // Print probability as percentage.
-#                 printf("%5.1f%%", nn->outputs[pos] * 100.0f);
+  for i in 0..<9:
+    if nn.outputs[i] > highest_prob:
+      highest_prob = nn.outputs[i]
+      highest_prob_idx = i
 
-#                 // Add markers.
-#                 if (pos == highest_prob_idx) {
-#                     printf("*"); // Highest probability overall.
-#                 }
-#                 if (pos == best_move) {
-#                     printf("#"); // Selected move (highest valid probability).
-#                 }
-#                 printf(" ");
-#             }
-#             printf("\n");
-#         }
+    if (
+      state.board[i] == '.' and
+      (best_move == -1 or nn.outputs[i] > best_legal_prob)
+    ):
+        best_move = i
+        best_legal_prob = nn.outputs[i]
 
-#         // Sum of probabilities should be 1.0, hopefully.
-#         // Just debugging.
-#         float total_prob = 0.0f;
-#         for (int i = 0; i < 9; i++)
-#             total_prob += nn->outputs[i];
-#         printf("Sum of all probabilities: %.2f\n\n", total_prob);
-#     }
-#     return best_move;
-# }
+  # That's just for debugging. It's interesting to show to user
+  # in the first iterations of the game, since you can see how initially
+  # the net picks illegal moves as best, and so forth.
+
+  if display_probs:
+    echo "Neural network move probabilities:\n"
+
+    for row in 0..<3:
+      for col in 0..<3:
+        let pos = row * 3 + col
+        echo &"{nn.outputs[pos] * 100.0}"
+
+        if pos == highest_prob_idx:
+          echo "*"
+
+        if pos == best_move:
+          echo "#"
+
+        echo " "
+
+      echo "\n"
+
+  # Sum of probabilities should be 1.0, hopefully.
+  # Just debugging.
+
+  var total_prob = 0.0
+  for i in 0..<9:
+    total_prob += nn.outputs[i]
+
+  echo &"Sum of all probabilities: {total_prob}"
+
+  best_move
 
 # Backpropagation function.
 # The only difference here from vanilla backprop is that we have
@@ -359,103 +361,108 @@ proc backprop(
   for j in 0..<NN_HIDDEN_SIZE:
     nn.biases_h[j] -= learning_rate * hidden_deltas[j]
 
-# /* Train the neural network based on game outcome.
-#  *
-#  * The move_history is just an integer array with the index of all the
-#  * moves. This function is designed so that you can specify if the
-#  * game was started by the move by the NN or human, but actually the
-#  * code always let the human move first. */
-# void learn_from_game(NeuralNetwork *nn, int *move_history, int num_moves, int nn_moves_even, char winner) {
-#     // Determine reward based on game outcome
-#     float reward;
-#     char nn_symbol = nn_moves_even ? 'O' : 'X';
+# Train the neural network based on game outcome.
+#
+# The move_history is just an integer array with the index of all the
+# moves. This function is designed so that you can specify if the
+# game was started by the move by the NN or human, but actually the
+# code always let the human move first.
 
-#     if (winner == 'T') {
-#         reward = 0.3f;  // Small reward for draw
-#     } else if (winner == nn_symbol) {
-#         reward = 1.0f;  // Large reward for win
-#     } else {
-#         reward = -2.0f; // Negative reward for loss
-#     }
+proc learn_from_game(
+  nn: NeuralNetworkRef,
+  move_history: var array[9, int],
+  num_moves: int,
+  nn_moves_even: bool,
+  winner: char
+) = 
+  var reward: float
+  let nn_symbol = if nn_moves_even: 'O' else: 'X'
 
-#     GameState state;
-#     float target_probs[NN_OUTPUT_SIZE];
+  if winner == 'T':
+    reward = 0.3 # Small reward for draw
+  elif (winner == nn_symbol):
+    reward = 1.0 # Large reward for win
+  else:
+    reward = -2.0 # Negative reward for loss
 
-#     // Process each move the neural network made.
-#     for (int move_idx = 0; move_idx < num_moves; move_idx++) {
-#         // Skip if this wasn't a move by the neural network.
-#         if ((nn_moves_even && move_idx % 2 != 1) ||
-#             (!nn_moves_even && move_idx % 2 != 0))
-#         {
-#             continue;
-#         }
+  let state = GameStateRef()
+  var target_probs: array[NN_OUTPUT_SIZE, float]
 
-#         // Recreate board state BEFORE this move was made.
-#         init_game(&state);
-#         for (int i = 0; i < move_idx; i++) {
-#             char symbol = (i % 2 == 0) ? 'X' : 'O';
-#             state.board[move_history[i]] = symbol;
-#         }
+  for move_idx in 0..<num_moves:
+    # Skip if this wasn't a move by the neural network.
+    if (
+      (nn_moves_even and (move_idx mod 2) != 1) or
+      (not nn_moves_even and (move_idx mod 2) != 0)
+    ):
+        continue
 
-#         // Convert board to inputs and do forward pass.
-#         float inputs[NN_INPUT_SIZE];
-#         board_to_inputs(&state, inputs);
-#         forward_pass(nn, inputs);
+    state.init_game()
 
-#         /* The move that was actually made by the NN, that is
-#          * the one we want to reward (positively or negatively). */
-#         int move = move_history[move_idx];
+    for i in 0..<move_idx:
+      let symbol = if ((i mod 2) == 0): 'X' else: 'O'
+      state.board[move_history[i]] = symbol
 
-#         /* Here we can't really implement temporal difference in the strict
-#          * reinforcement learning sense, since we don't have an easy way to
-#          * evaluate if the current situation is better or worse than the
-#          * previous state in the game.
-#          *
-#          * However "time related" we do something that is very effective in
-#          * this case: we scale the reward according to the move time, so that
-#          * later moves are more impacted (the game is less open to different
-#          * solutions as we go forward).
-#          *
-#          * We give a fixed 0.5 importance to all the moves plus
-#          * a 0.5 that depends on the move position.
-#          *
-#          * NOTE: this makes A LOT of difference. Experiment with different
-#          * values.
-#          *
-#          * LEARNING OPPORTUNITY: Temporal Difference in Reinforcement Learning
-#          * is a very important result, that was worth the Turing Award in
-#          * 2024 to Sutton and Barto. You may want to read about it. */
-#         float move_importance = 0.5f + 0.5f * (float)move_idx/(float)num_moves;
-#         float scaled_reward = reward * move_importance;
+    # Convert board to inputs and do forward pass.
 
-#         /* Create target probability distribution:
-#          * let's start with the logits all set to 0. */
-#         for (int i = 0; i < NN_OUTPUT_SIZE; i++)
-#             target_probs[i] = 0;
+    var inputs: array[NN_INPUT_SIZE, float]
+    state.board_to_inputs(inputs)
+    nn.forward_pass(inputs)
 
-#         /* Set the target for the chosen move based on reward: */
-#         if (scaled_reward >= 0) {
-#             /* For positive reward, set probability of the chosen move to
-#              * 1, with all the rest set to 0. */
-#             target_probs[move] = 1;
-#         } else {
-#             /* For negative reward, distribute probability to OTHER
-#              * valid moves, which is conceptually the same as discouraging
-#              * the move that we want to discourage. */
-#             int valid_moves_left = 9-move_idx-1;
-#             float other_prob = 1.0f / valid_moves_left;
-#             for (int i = 0; i < 9; i++) {
-#                 if (state.board[i] == '.' && i != move) {
-#                     target_probs[i] = other_prob;
-#                 }
-#             }
-#         }
+    # The move that was actually made by the NN, that is
+    # the one we want to reward (positively or negatively).
 
-#         /* Call the generic backpropagation function, using
-#          * our target logits as target. */
-#         backprop(nn, target_probs, LEARNING_RATE, scaled_reward);
-#     }
-# }
+    let move = move_history[move_idx]
+
+    # Here we can't really implement temporal difference in the strict
+    # reinforcement learning sense, since we don't have an easy way to
+    # evaluate if the current situation is better or worse than the
+    # previous state in the game.
+    #
+    # However "time related" we do something that is very effective in
+    # this case: we scale the reward according to the move time, so that
+    # later moves are more impacted (the game is less open to different
+    # solutions as we go forward).
+    #
+    # We give a fixed 0.5 importance to all the moves plus
+    # a 0.5 that depends on the move position.
+    #
+    # NOTE: this makes A LOT of difference. Experiment with different
+    # values.
+    #
+    # LEARNING OPPORTUNITY: Temporal Difference in Reinforcement Learning
+    # is a very important result, that was worth the Turing Award in
+    # 2024 to Sutton and Barto. You may want to read about it.
+
+    let move_importance = 0.5 + 0.5 * move_idx.float / num_moves.float
+    let scaled_reward = reward * move_importance
+
+    # Create target probability distribution:
+    # let's start with the logits all set to 0.
+
+    for i in 0..<NN_OUTPUT_SIZE:
+      target_probs[i] = 0
+
+    # Set the target for the chosen move based on reward:
+
+    if (scaled_reward >= 0):
+      # For positive reward, set probability of the chosen move to
+      # 1, with all the rest set to 0.
+      target_probs[move] = 1
+    else:
+      # For negative reward, distribute probability to OTHER
+      # valid moves, which is conceptually the same as discouraging
+      # the move that we want to discourage.
+
+      let valid_moves_left = 9 - move_idx - 1
+      let other_prob = 1.0 / valid_moves_left.float
+      for i in 0..<9:
+        if (
+          (state.board[i] == '.') and
+          (i != move)
+        ):
+          target_probs[i] = other_prob
+
+      nn.backprop(target_probs, LEARNING_RATE, scaled_reward)
 
 # /* Play one game of Tic Tac Toe against the neural network. */
 # void play_game(NeuralNetwork *nn) {
