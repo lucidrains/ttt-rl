@@ -135,7 +135,7 @@ proc forward_pass(nn: NeuralNetworkRef, inputs: array[NN_INPUT_SIZE, float]) =
     var sum = nn.biases_h[i]
 
     for j in 0..<NN_INPUT_SIZE:
-      sum += inputs[j] * nn.weights_ih[j * NN_HIDDEN_SIZE]
+      sum += inputs[j] * nn.weights_ih[j * NN_HIDDEN_SIZE + i]
 
     nn.hiddens[i] = relu(sum)
 
@@ -162,8 +162,7 @@ proc init_game(state: GameStateRef) =
 
 proc display_board(state: GameStateRef) =
   for row in 0..<3:
-    echo &"{state.board[row*3]}{state.board[row*3 + 1]}{state.board[row*3 + 2]}"
-    echo &"{(row*3)}{(row*3 + 1)}{(row*3 + 2)}"
+    echo &"{state.board[row*3]}{state.board[row*3 + 1]}{state.board[row*3 + 2]} {(row*3)}{(row*3 + 1)}{(row*3 + 2)}"
 
   echo "\n"
 
@@ -187,28 +186,27 @@ proc display_board(state: GameStateRef) =
 # exeriment this "permutation coding" that I'm using here.
 
 proc board_to_inputs(state: GameStateRef, inputs: var array[NN_INPUT_SIZE, float]) =
+
   for i in 0..<9:
-    if state.board[i] == '.':
-      inputs[i*2] = 0
-      inputs[i*2+1] = 0
+    (inputs[i*2], inputs[i*2+1]) = if state.board[i] == '.':
+      (0.0, 0.0)
     elif state.board[i] == 'X':
-      inputs[i*2] = 1
-      inputs[i*2+1] = 0
+      (1.0, 0.0)
     else:
-      inputs[i*2] = 0
-      inputs[i*2+1] = 1
+      (0.0, 1.0)
 
 # Check if the game is over (win or tie).
 # Very brutal but fast enough.
 
-proc check_game_over(state: GameStateRef): (bool, Option[char]) =
+proc check_game_over(state: GameStateRef, winner: var char): bool =
   for i in 0..<3:
     if (
       state.board[i*3] != '.' and
       state.board[i*3] == state.board[i*3+1] and
       state.board[i*3+1] == state.board[i*3+2]
     ):
-      return (true, some(state.board[i*3]))
+      winner = state.board[i*3]
+      return true
 
   # Check columns
 
@@ -218,7 +216,8 @@ proc check_game_over(state: GameStateRef): (bool, Option[char]) =
       state.board[i] == state.board[i+3] and
       state.board[i+3] == state.board[i+6]
     ):
-      return (true, some(state.board[i]))
+      winner = state.board[i]
+      return true
 
   # Check diagonals
 
@@ -227,14 +226,16 @@ proc check_game_over(state: GameStateRef): (bool, Option[char]) =
     (state.board[0] == state.board[4]) and
     (state.board[4] == state.board[8])
   ):
-    return (true, some(state.board[0]))
+    winner = state.board[0]
+    return true
 
   if (
     (state.board[2] != '.') and
     (state.board[2] == state.board[4]) and
     (state.board[4] == state.board[6])
   ):
-    return (true, some(state.board[2]))
+    winner = state.board[2]
+    return true
 
   # Check for tie (no free tiles left).
 
@@ -244,9 +245,10 @@ proc check_game_over(state: GameStateRef): (bool, Option[char]) =
       empty_tiles.inc
 
   if empty_tiles == 0:
-    return (true, some('T'))
+    winner = 'T'
+    return true
 
-  return (false, none(char)) # Game Continues
+  return false # Game Continues
 
 # Get the best move for the computer using the neural network.
 # Note that there is no complex sampling at all, we just get
@@ -412,7 +414,7 @@ proc learn_from_game(
       (nn_moves_even and (move_idx mod 2) != 1) or
       (not nn_moves_even and (move_idx mod 2) != 0)
     ):
-        continue
+      continue
 
     state.init_game()
 
@@ -470,7 +472,6 @@ proc learn_from_game(
       # For negative reward, distribute probability to OTHER
       # valid moves, which is conceptually the same as discouraging
       # the move that we want to discourage.
-
       let valid_moves_left = 9 - move_idx - 1
       let other_prob = 1.0 / valid_moves_left.float
       for i in 0..<9:
@@ -489,7 +490,7 @@ proc play_game(nn: NeuralNetworkRef) =
 
   var
     has_won: bool
-    winner: Option[char]
+    winner: char
     move_history: array[9, int]
     num_moves: int
 
@@ -498,7 +499,7 @@ proc play_game(nn: NeuralNetworkRef) =
   echo "Welcome to Tic Tac Toe! You are X, the computer is O.\n"
   echo "Enter positions as numbers from 0 to 8 (see picture).\n"
 
-  while ((has_won, winner) = state.check_game_over(); not has_won):
+  while not state.check_game_over(winner):
     state.display_board()
 
     if state.current_player == 0:
@@ -511,6 +512,9 @@ proc play_game(nn: NeuralNetworkRef) =
 
       movec = getch()
       move = movec.ord - '0'.ord
+
+      if (move == 9):
+        quit()
 
       if (
         (move < 0) or
@@ -540,16 +544,14 @@ proc play_game(nn: NeuralNetworkRef) =
 
   state.display_board()
 
-  let winning_char = winner.get
-
-  if (winning_char == 'X'):
+  if (winner == 'X'):
     echo "You win!\n"
-  elif (winning_char == 'O'):
-    echo "Compuer wins!\n"
+  elif (winner == 'O'):
+    echo "Computer wins!\n"
   else:
     echo "It's a tie!\n"
 
-  nn.learn_from_game(move_history, num_moves, true, winning_char)
+  nn.learn_from_game(move_history, num_moves, true, winner)
 
 # Get a random valid move, this is used for training
 # against a random opponent. Note: this function will loop forever
@@ -589,13 +591,13 @@ proc play_random_game(
 
   var
     has_won: bool
-    winner: Option[char]
+    winner: char
     move: int
     num_moves = 0
 
   state.init_game()
 
-  while ((has_won, winner) = state.check_game_over(); not has_won):
+  while not state.check_game_over(winner):
 
     move = if (state.current_player == 0):
       state.random_move()
@@ -611,10 +613,8 @@ proc play_random_game(
 
     state.current_player = state.current_player xor 1
 
-  let winner_char = winner.get
-
-  nn.learn_from_game(move_history, num_moves, true, winner_char)
-  return winner_char
+  nn.learn_from_game(move_history, num_moves, true, winner)
+  return winner
 
 # Train the neural network against random moves.
 
