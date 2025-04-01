@@ -5,7 +5,8 @@ import std / [
   sequtils,
   strutils,
   strformat,
-  random
+  random,
+  options
 ]
 
 randomize()
@@ -155,102 +156,79 @@ proc init_game(state: GameStateRef) =
 
   state.current_player = 0 # Player (X) goes first
 
-# /* Show board on screen in ASCII "art"... */
-# void display_board(GameState *state) {
-#     for (int row = 0; row < 3; row++) {
-#         // Display the board symbols.
-#         printf("%c%c%c ", state->board[row*3], state->board[row*3+1],
-#                           state->board[row*3+2]);
+# Show board on screen in ASCII "art"...
 
-#         // Display the position numbers for this row, for the poor human.
-#         printf("%d%d%d\n", row*3, row*3+1, row*3+2);
-#     }
-#     printf("\n");
-# }
+proc display_board(state: GameStateRef) =
+  for row in 0..<3:
+    echo &"{state.board[row*3]}{state.board[row*3 + 1]}{state.board[row*3 + 2]}"
+    echo &"{(row*3)}{(row*3 + 1)}{(row*3 + 2)}"
 
-# /* Convert board state to neural network inputs. Note that we use
-#  * a peculiar encoding I descrived here:
-#  * https://www.youtube.com/watch?v=EXbgUXt8fFU
-#  *
-#  * Instead of one-hot encoding, we can represent N different categories
-#  * as different bit patterns. In this specific case it's trivial:
-#  *
-#  * 00 = empty
-#  * 10 = X
-#  * 01 = O
-#  *
-#  * Two inputs per symbol instead of 3 in this case, but in the general case
-#  * this reduces the input dimensionality A LOT.
-#  *
-#  * LEARNING OPPORTUNITY: You may want to learn (if not already aware) of
-#  * different ways to represent non scalar inputs in neural networks:
-#  * One hot encoding, learned embeddings, and even if it's just my random
-#  * exeriment this "permutation coding" that I'm using here.
-#  */
-# void board_to_inputs(GameState *state, float *inputs) {
-#     for (int i = 0; i < 9; i++) {
-#         if (state->board[i] == '.') {
-#             inputs[i*2] = 0;
-#             inputs[i*2+1] = 0;
-#         } else if (state->board[i] == 'X') {
-#             inputs[i*2] = 1;
-#             inputs[i*2+1] = 0;
-#         } else {  // 'O'
-#             inputs[i*2] = 0;
-#             inputs[i*2+1] = 1;
-#         }
-#     }
-# }
+  echo "\n"
 
-# /* Check if the game is over (win or tie).
-#  * Very brutal but fast enough. */
-# int check_game_over(GameState *state, char *winner) {
-#     // Check rows.
-#     for (int i = 0; i < 3; i++) {
-#         if (state->board[i*3] != '.' &&
-#             state->board[i*3] == state->board[i*3+1] &&
-#             state->board[i*3+1] == state->board[i*3+2]) {
-#             *winner = state->board[i*3];
-#             return 1;
-#         }
-#     }
+# Convert board state to neural network inputs. Note that we use
+# a peculiar encoding I descrived here:
+# https://www.youtube.com/watch?v=EXbgUXt8fFU
+#
+# Instead of one-hot encoding, we can represent N different categories
+# as different bit patterns. In this specific case it's trivial:
+#
+# 00 = empty
+# 10 = X
+# 01 = O
+#
+# Two inputs per symbol instead of 3 in this case, but in the general case
+# this reduces the input dimensionality A LOT.
+#
+# LEARNING OPPORTUNITY: You may want to learn (if not already aware) of
+# different ways to represent non scalar inputs in neural networks:
+# One hot encoding, learned embeddings, and even if it's just my random
+# exeriment this "permutation coding" that I'm using here.
 
-#     // Check columns.
-#     for (int i = 0; i < 3; i++) {
-#         if (state->board[i] != '.' &&
-#             state->board[i] == state->board[i+3] &&
-#             state->board[i+3] == state->board[i+6]) {
-#             *winner = state->board[i];
-#             return 1;
-#         }
-#     }
+proc board_to_inputs(state: GameStateRef, inputs: var array[NN_INPUT_SIZE, float]) =
+  for i in 0..<9:
+    if state.board[i] == '.':
+      inputs[i*2] = 0
+      inputs[i*2+1] = 0
+    elif state.board[i] == 'X':
+      inputs[i*2] = 1
+      inputs[i*2+1] = 0
+    else:
+      inputs[i*2] = 0
+      inputs[i*2+1] = 1
 
-#     // Check diagonals.
-#     if (state->board[0] != '.' &&
-#         state->board[0] == state->board[4] &&
-#         state->board[4] == state->board[8]) {
-#         *winner = state->board[0];
-#         return 1;
-#     }
-#     if (state->board[2] != '.' &&
-#         state->board[2] == state->board[4] &&
-#         state->board[4] == state->board[6]) {
-#         *winner = state->board[2];
-#         return 1;
-#     }
+# Check if the game is over (win or tie).
+# Very brutal but fast enough.
 
-#     // Check for tie (no free tiles left).
-#     int empty_tiles = 0;
-#     for (int i = 0; i < 9; i++) {
-#         if (state->board[i] == '.') empty_tiles++;
-#     }
-#     if (empty_tiles == 0) {
-#         *winner = 'T';  // Tie
-#         return 1;
-#     }
+proc check_game_over(state: GameStateRef): (int, Option[char]) =
+  for i in 0..<3:
+    if (
+      state.board[i*3] != '.' and
+      state.board[i*3] == state.board[i*3+1] and
+      state.board[i*3+1] == state.board[i*3+2]
+    ):
+      return (1, some(state.board[i*3]))
 
-#     return 0; // Game continues.
-# }
+  # Check diagonals.
+
+  for i in 0..<3:
+    if (
+      state.board[i] != '.' and
+      state.board[i] == state.board[i+3] and
+      state.board[i+3] == state.board[i+6]
+    ):
+      return (1, some(state.board[i]))
+
+  # Check for tie (no free tiles left).
+
+  var empty_tiles = 0
+  for i in 0..<9:
+    if state.board[i] == '.':
+      empty_tiles.inc
+
+  if empty_tiles == 0:
+    return (1, some('T'))
+
+  return (0, none(char)) # Game Continues
 
 # /* Get the best move for the computer using the neural network.
 #  * Note that there is no complex sampling at all, we just get
