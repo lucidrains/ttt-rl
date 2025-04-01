@@ -122,11 +122,12 @@ proc softmax(
 # Neural network foward pass (inference). We store the activations
 # so we can also do backpropagation later.
 
-proc forward_pass(nn: NeuralNetworkRef, inputs: var array[NN_INPUT_SIZE, float]) =
+proc forward_pass(nn: NeuralNetworkRef, inputs: array[NN_INPUT_SIZE, float]) =
 
   # Copy Inputs
 
-  inputs = move(nn.inputs)
+  for i in 0..<NN_INPUT_SIZE:
+    nn.inputs[i] = inputs[i]
 
   # Input to hidden layer.
 
@@ -209,7 +210,7 @@ proc check_game_over(state: GameStateRef): (bool, Option[char]) =
     ):
       return (true, some(state.board[i*3]))
 
-  # Check diagonals.
+  # Check columns
 
   for i in 0..<3:
     if (
@@ -218,6 +219,22 @@ proc check_game_over(state: GameStateRef): (bool, Option[char]) =
       state.board[i+3] == state.board[i+6]
     ):
       return (true, some(state.board[i]))
+
+  # Check diagonals
+
+  if (
+    (state.board[0] != '.') and
+    (state.board[0] == state.board[4]) and
+    (state.board[4] == state.board[8])
+  ):
+    return (true, some(state.board[0]))
+
+  if (
+    (state.board[2] != '.') and
+    (state.board[2] == state.board[4]) and
+    (state.board[4] == state.board[6])
+  ):
+    return (true, some(state.board[2]))
 
   # Check for tie (no free tiles left).
 
@@ -262,8 +279,8 @@ proc get_computer_move(
       state.board[i] == '.' and
       (best_move == -1 or nn.outputs[i] > best_legal_prob)
     ):
-        best_move = i
-        best_legal_prob = nn.outputs[i]
+      best_move = i
+      best_legal_prob = nn.outputs[i]
 
   # That's just for debugging. It's interesting to show to user
   # in the first iterations of the game, since you can see how initially
