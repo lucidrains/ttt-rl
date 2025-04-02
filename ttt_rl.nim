@@ -263,6 +263,7 @@ proc get_computer_move(
   var inputs: array[NN_INPUT_SIZE, float]
 
   state.board_to_inputs(inputs)
+  nn.forward_pass(inputs)
 
   # Find the highest probability value and best legal move.
 
