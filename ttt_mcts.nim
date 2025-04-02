@@ -1,4 +1,7 @@
 
+# following the pull request here https://github.com/antirez/ttt-rl/pull/2
+# from @robitec97
+
 import std / [
   os,
   math,
@@ -28,6 +31,137 @@ type
 
   GameStateRef = ref GameState
 
+# Initialize game state with an empty board.
+
+proc init_game(state: GameStateRef) =
+  for i in 0..<9:
+    state.board[i] = '.'
+
+  state.current_player = 0 # Player (X) goes first
+
+# Show board on screen in ASCII "art"...
+
+proc display_board(state: GameStateRef) =
+  for row in 0..<3:
+    echo &"{state.board[row*3]}{state.board[row*3 + 1]}{state.board[row*3 + 2]} {(row*3)}{(row*3 + 1)}{(row*3 + 2)}"
+
+  echo "\n"
+
+# Count valid moves
+
+proc count_valid_moves(state: GameStateRef): int =
+  for tile in state.board:
+    if tile == '.':
+      result.inc
+
+# Current player symbol
+
+proc current_player_symbol(state: GameStateRef): char =
+  if state.current_player == 0: 'X' else: 'O'
+
+proc next_player(state: GameStateRef): int =
+  state.current_player xor 1
+
+proc advance_player(state: GameStateRef) =
+  state.current_player = state.next_player
+
+# Convert board state to neural network inputs. Note that we use
+# a peculiar encoding I descrived here:
+# https://www.youtube.com/watch?v=EXbgUXt8fFU
+#
+# Instead of one-hot encoding, we can represent N different categories
+# as different bit patterns. In this specific case it's trivial:
+#
+# 00 = empty
+# 10 = X
+# 01 = O
+#
+# Two inputs per symbol instead of 3 in this case, but in the general case
+# this reduces the input dimensionality A LOT.
+#
+# LEARNING OPPORTUNITY: You may want to learn (if not already aware) of
+# different ways to represent non scalar inputs in neural networks:
+# One hot encoding, learned embeddings, and even if it's just my random
+# exeriment this "permutation coding" that I'm using here.
+
+proc board_to_inputs(state: GameStateRef, inputs: var array[NN_INPUT_SIZE, float]) =
+
+  for i in 0..<9:
+    (inputs[i*2], inputs[i*2+1]) = if state.board[i] == '.':
+      (0.0, 0.0)
+    elif state.board[i] == 'X':
+      (1.0, 0.0)
+    else:
+      (0.0, 1.0)
+
+# Check if the game is over (win or tie).
+# Very brutal but fast enough.
+
+proc check_game_over(state: GameStateRef, winner: var char): bool =
+  for i in 0..<3:
+    if (
+      state.board[i*3] != '.' and
+      state.board[i*3] == state.board[i*3+1] and
+      state.board[i*3+1] == state.board[i*3+2]
+    ):
+      winner = state.board[i*3]
+      return true
+
+  # Check columns
+
+  for i in 0..<3:
+    if (
+      state.board[i] != '.' and
+      state.board[i] == state.board[i+3] and
+      state.board[i+3] == state.board[i+6]
+    ):
+      winner = state.board[i]
+      return true
+
+  # Check diagonals
+
+  if (
+    (state.board[0] != '.') and
+    (state.board[0] == state.board[4]) and
+    (state.board[4] == state.board[8])
+  ):
+    winner = state.board[0]
+    return true
+
+  if (
+    (state.board[2] != '.') and
+    (state.board[2] == state.board[4]) and
+    (state.board[4] == state.board[6])
+  ):
+    winner = state.board[2]
+    return true
+
+  # Check for tie (no free tiles left).
+
+  var empty_tiles = 0
+  for tile in state.board:
+    if tile == '.':
+      empty_tiles.inc
+
+  if empty_tiles == 0:
+    winner = 'T'
+    return true
+
+  return false # Game Continues
+
+# Get a random valid move, this is used for training
+# against a random opponent. Note: this function will loop forever
+# if the board is full, but here we want simple code.
+
+proc get_random_move(state: GameStateRef): int =
+  while true:
+    let move = rand(8)
+
+    if (state.board[move] != '.'):
+      continue
+
+    return move
+
 # Neural network structure. For simplicity we have just
 # one hidden layer and fixed sizes (see defines above).
 # However for this problem going deeper than one hidden layer
@@ -48,6 +182,212 @@ type
     outputs: array[NN_OUTPUT_SIZE, float] # Outputs after softmax().
 
   NeuralNetworkRef = ref NeuralNetwork
+
+# Monte Carlo Tree Search related
+
+const
+  MCTS_SIMULATIONS = 1000
+  UCB_CONSTANT = 1.414  # Exploration parameter, usnig the most common used value
+  LARGE_MAX_VALUE = 1e9
+
+type
+  MCTSNode = object
+    state: GameStateRef    # Game state at this node
+    visits: int            # Number of times this node has been visited
+    score: float           # Total score from simulations
+    move: int              # Move that led to this state (-1 for root)
+    num_children: int      # Number of child nodes
+    children: seq[MCTSNodeRef] # Seq of child nodes
+    expanded: bool         # Flag to indicate if node is expanded
+
+  MCTSNodeRef = ref MCTSNode
+
+proc create_mcts_node(state: GameStateRef, move: int): MCTSNodeRef =
+  MCTSNodeRef(state: state, move: move)
+
+# Expand a node by creating all possible child nodes
+
+proc expand(node: MCTSNodeRef) =
+  if node.expanded:
+    return
+
+  let valid_moves = node.state.count_valid_moves()
+
+  if valid_moves == 0: # if no valid moves, can't expand
+    return
+
+  node.num_children = valid_moves
+
+  let state = node.state
+  var child_idx = 0
+
+  for move in 0..<9:
+    let tile = state.board[move]
+
+    if tile != '.':
+      continue
+
+    let symbol = state.current_player_symbol
+
+    # Create new game state with this move
+
+    let new_state = GameStateRef()
+    new_state[] = state[]
+
+    new_state.board[move] = symbol
+    new_state.advance_player()
+
+    # Create child node
+
+    node.children.add(new_state.create_mcts_node(move))
+    child_idx.inc
+
+  node.expanded = true
+
+# Calculating the UCB score
+
+proc calculate_ucb(node: MCTSNodeRef, parent_visits: int): float =
+
+  if node.visits == 0:
+    return LARGE_MAX_VALUE
+
+  # UCB formula: exploitation + exploration
+
+  let exploitation = node.score / node.visits.float
+
+  let exploration = UCB_CONSTANT * sqrt(ln(parent_visits.float) / node.visits.float)
+
+  return exploitation + exploration
+
+# Select the best chlid node accoring to UCB scores
+
+proc select_best_child(node: MCTSNodeRef): MCTSNodeRef =
+
+  var best_score = -LARGE_MAX_VALUE
+
+  for child in node.children:
+    let ucb = child.calculate_ucb(node.visits)
+
+    if ucb > best_score:
+      best_score = ucb
+      result = child
+
+# Perform a simulation from the given state to the end of the game
+
+proc simulate_mcts(input_state: GameStateRef): float =
+
+  let state = GameStateRef()
+  state[] = input_state[]
+
+  var
+    winner: char
+
+  while not state.check_game_over(winner):
+    let move = state.get_random_move()
+    let symbol = state.current_player_symbol
+    state.board[move] = symbol
+    state.advance_player()
+
+  let starting_player = state.next_player
+
+  if winner == 'T':
+    return 0.5 # Tie
+  elif ((
+    (winner == 'X' and starting_player == 0) or
+    (winner == 'O' and starting_player == 1)
+  )):
+    return 1.0 # Win
+  else:
+    return 0.0 # Loss
+
+proc backpropagate(node: MCTSNodeRef, score: float) =
+  while not node.is_nil:
+    node.visits.inc
+
+    # Flip the score when moving up the tree since players alternate
+    node.score += score
+
+    # score = 1.0 - score
+    # This implementation does not track parents
+    break
+
+# Perform one iteration of the MCTS algorithm
+
+proc iterate(node: MCTSNodeRef) =
+
+  var
+    curr_node: MCTSNodeRef = node
+
+  # 1. Selection: traverse the tree to find the most promising leaf nodes
+  while curr_node.expanded and curr_node.num_children > 0:
+    curr_node = curr_node.select_best_child()
+
+  var
+    winner: char
+
+  let state = curr_node.state
+
+  # Check if game is over at this node
+  if state.check_game_over(winner):
+    # Game is over, backpropagate the result
+
+    let score = if winner == 'T':
+      0.5 # Tie
+    elif ((
+      (winner == 'X' and state.current_player == 1) or
+      (winner == 'O' and state.current_player == 0)
+    )):
+      1.0 # Win for the player who just moved
+    else:
+      0.0 # Loss for the player who just moved
+
+    curr_node.backpropagate(score)
+    return
+
+  # 2. Expansion: Create all possible child nodes
+  curr_node.expand()
+
+  # If not children were created, simulate from current node
+  if curr_node.num_children == 0:
+    let score = state.simulate_mcts()
+    curr_node.backpropagate(score)
+    return
+
+  # 3. Simulation: choose a random child and simulate
+  let rand_child_idx = rand(curr_node.num_children - 1)
+  let rand_child = curr_node.children[rand_child_idx]
+
+  # 4. Simulation: play the game randomly to the end
+  let score = state.simulate_mcts()
+
+  # 5. Backpropagation: update statistics
+  rand_child.visits.inc
+  rand_child.score += score
+  curr_node.backpropagate(1.0 - score) # Parent gets opposite score
+
+# Get the best move using MCTS
+
+proc get_mcts_move(state: GameStateRef): int =
+
+  # Create root node
+  let root = state.create_mcts_node(-1)
+
+  # Run MCTS simulations
+  for i in 0..<MCTS_SIMULATIONS:
+    root.iterate()
+
+  # Find the child with the highest number of visits
+  var
+    best_move = -1
+    most_visits = -1
+
+  # First expand the root node if not already expanded
+  for child in root.children:
+    if child.visits > most_visits:
+      most_visits = child.visits
+      best_move = child.move
+
+  return best_move
 
 # ReLU activation function
 
@@ -143,106 +483,6 @@ proc forward_pass(nn: NeuralNetworkRef, inputs: array[NN_INPUT_SIZE, float]) =
   # Apply softmax to get the final probabilities.
 
   softmax(nn.raw_logits, nn.outputs)
-
-# Initialize game state with an empty board.
-
-proc init_game(state: GameStateRef) =
-  for i in 0..<9:
-    state.board[i] = '.'
-
-  state.current_player = 0 # Player (X) goes first
-
-# Show board on screen in ASCII "art"...
-
-proc display_board(state: GameStateRef) =
-  for row in 0..<3:
-    echo &"{state.board[row*3]}{state.board[row*3 + 1]}{state.board[row*3 + 2]} {(row*3)}{(row*3 + 1)}{(row*3 + 2)}"
-
-  echo "\n"
-
-# Convert board state to neural network inputs. Note that we use
-# a peculiar encoding I descrived here:
-# https://www.youtube.com/watch?v=EXbgUXt8fFU
-#
-# Instead of one-hot encoding, we can represent N different categories
-# as different bit patterns. In this specific case it's trivial:
-#
-# 00 = empty
-# 10 = X
-# 01 = O
-#
-# Two inputs per symbol instead of 3 in this case, but in the general case
-# this reduces the input dimensionality A LOT.
-#
-# LEARNING OPPORTUNITY: You may want to learn (if not already aware) of
-# different ways to represent non scalar inputs in neural networks:
-# One hot encoding, learned embeddings, and even if it's just my random
-# exeriment this "permutation coding" that I'm using here.
-
-proc board_to_inputs(state: GameStateRef, inputs: var array[NN_INPUT_SIZE, float]) =
-
-  for i in 0..<9:
-    (inputs[i*2], inputs[i*2+1]) = if state.board[i] == '.':
-      (0.0, 0.0)
-    elif state.board[i] == 'X':
-      (1.0, 0.0)
-    else:
-      (0.0, 1.0)
-
-# Check if the game is over (win or tie).
-# Very brutal but fast enough.
-
-proc check_game_over(state: GameStateRef, winner: var char): bool =
-  for i in 0..<3:
-    if (
-      state.board[i*3] != '.' and
-      state.board[i*3] == state.board[i*3+1] and
-      state.board[i*3+1] == state.board[i*3+2]
-    ):
-      winner = state.board[i*3]
-      return true
-
-  # Check columns
-
-  for i in 0..<3:
-    if (
-      state.board[i] != '.' and
-      state.board[i] == state.board[i+3] and
-      state.board[i+3] == state.board[i+6]
-    ):
-      winner = state.board[i]
-      return true
-
-  # Check diagonals
-
-  if (
-    (state.board[0] != '.') and
-    (state.board[0] == state.board[4]) and
-    (state.board[4] == state.board[8])
-  ):
-    winner = state.board[0]
-    return true
-
-  if (
-    (state.board[2] != '.') and
-    (state.board[2] == state.board[4]) and
-    (state.board[4] == state.board[6])
-  ):
-    winner = state.board[2]
-    return true
-
-  # Check for tie (no free tiles left).
-
-  var empty_tiles = 0
-  for tile in state.board:
-    if tile == '.':
-      empty_tiles.inc
-
-  if empty_tiles == 0:
-    winner = 'T'
-    return true
-
-  return false # Game Continues
 
 # Get the best move for the computer using the neural network.
 # Note that there is no complex sampling at all, we just get
@@ -532,7 +772,7 @@ proc play_game(nn: NeuralNetworkRef) =
       move_history[num_moves] = move
       num_moves.inc
 
-    state.current_player = state.current_player xor 1
+    state.advance_player()
 
   state.display_board()
 
@@ -545,20 +785,7 @@ proc play_game(nn: NeuralNetworkRef) =
 
   nn.learn_from_game(move_history, num_moves, true, winner)
 
-# Get a random valid move, this is used for training
-# against a random opponent. Note: this function will loop forever
-# if the board is full, but here we want simple code.
-
-proc get_random_move(state: GameStateRef): int =
-  while true:
-    let move = rand(8)
-
-    if (state.board[move] != '.'):
-      continue
-
-    return move
-
-# Play a game against random moves and learn from it.
+# Play a game against MCTS moves and learn from it.
 #
 # This is a very simple Montecarlo Method applied to reinforcement
 # learning:
@@ -566,14 +793,8 @@ proc get_random_move(state: GameStateRef): int =
 # 1. We play a complete random game (episode).
 # 2. We determine the reward based on the outcome of the game.
 # 3. We update the neural network in order to maximize future rewards.
-#
-# LEARNING OPPORTUNITY: while the code uses some Montecarlo-alike
-# technique, important results were recently obtained using
-# Montecarlo Tree Search (MCTS), where a tree structure repesents
-# potential future game states that are explored according to
-# some selection: you may want to learn about it.
 
-proc play_random_game(
+proc play_mcts_game(
   nn: NeuralNetworkRef,
   move_history: var array[9, int],
   num_moves: int
@@ -591,7 +812,7 @@ proc play_random_game(
   while not state.check_game_over(winner):
 
     move = if (state.current_player == 0):
-      state.get_random_move()
+      state.get_mcts_move()
     else:
       state.get_computer_move(nn, false)
 
@@ -611,7 +832,8 @@ proc play_random_game(
 
 proc train_against_random(
   nn : NeuralNetworkRef,
-  num_games: int
+  num_games: int,
+  eval_every = 1000
 ) =
   var
     move_history: array[9, int]
@@ -620,12 +842,12 @@ proc train_against_random(
     losses = 0
     ties = 0
 
-  echo &"Training neural network against {num_games} random games...\n"
+  echo &"Training neural network against {num_games} MCTS games...\n"
 
   var played_games = 0
 
   for i in 0..<num_games:
-    let winner = nn.play_random_game(move_history, num_moves)
+    let winner = nn.play_mcts_game(move_history, num_moves)
 
     played_games.inc
 
@@ -641,7 +863,7 @@ proc train_against_random(
     proc to_percent(num, den: int): float =
       num.float * 100 / den.float
 
-    if (((i + 1) mod 10000) == 0):
+    if (((i + 1) mod eval_every) == 0):
       echo &"Games: {i + 1}, Wins: {wins} ({to_percent(wins, played_games):.3f}), Losses: {losses} ({to_percent(losses, played_games):.3f}), Ties: {ties} ({to_percent(ties, played_games):.3f})"
 
       played_games = 0
@@ -653,12 +875,12 @@ proc train_against_random(
 
 when is_main_module:
 
-  var random_games = 150_000 # Fast and enough to play in a decent way.
+  var mcts_games = 20_000 # Fast and enough to play in a decent way.
 
   let args = command_line_params()
 
   if args.len > 0:
-    random_games = parse_int(args[0])
+    mcts_games = parse_int(args[0])
 
   # Initialize neural network.
 
@@ -666,8 +888,8 @@ when is_main_module:
 
   nn.init_neural_network()
 
-  if random_games > 0:
-    nn.train_against_random(random_games)
+  if mcts_games > 0:
+    nn.train_against_random(mcts_games)
 
   var play_again: char
 
