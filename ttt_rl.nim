@@ -64,21 +64,21 @@ proc relu_derivative(x: float): float =
 # care as this is a trivial example.
 
 proc random_weight(): float =
-    rand(1.0) - 0.5
+  rand(1.0) - 0.5
 
 proc init_neural_network(nn: NeuralNetworkRef) =
 
-  for i in 0..<(NN_INPUT_SIZE * NN_HIDDEN_SIZE):
-    nn.weights_ih[i] = random_weight()
+  for weight in nn.weights_ih.mitems:
+    weight = random_weight()
 
-  for i in 0..<(NN_HIDDEN_SIZE * NN_OUTPUT_SIZE):
-    nn.weights_ho[i] = random_weight()
+  for weight in nn.weights_ho.mitems:
+    weight = random_weight()
 
-  for i in 0..<NN_HIDDEN_SIZE:
-    nn.biases_h[i] = random_weight()
+  for weight in nn.biases_h.mitems:
+    weight = random_weight()
 
-  for i in 0..<NN_OUTPUT_SIZE:
-    nn.biases_o[i] = random_weight()
+  for weight in nn.biases_o.mitems:
+    weight = random_weight()
 
 # Apply softmax activation function to an array input, and
 # set the result into output.
@@ -108,16 +108,10 @@ proc softmax(
 
   # Normalize to get probabilities.
 
-  if sum > 0:
-    for i in 0..<output.len:
-      output[i] /= sum
-  else:
-    # Fallback in case of numerical issues, just provide
-    # a uniform distribution.
+  assert sum > 0
 
-    let den = output.len.float
-    for i in 0..<output.len:
-      output[i] = 1.0 / den
+  for i in 0..<output.len:
+    output[i] /= sum
 
 # Neural network foward pass (inference). We store the activations
 # so we can also do backpropagation later.
@@ -240,8 +234,8 @@ proc check_game_over(state: GameStateRef, winner: var char): bool =
   # Check for tie (no free tiles left).
 
   var empty_tiles = 0
-  for i in 0..<9:
-    if state.board[i] == '.':
+  for tile in state.board:
+    if tile == '.':
       empty_tiles.inc
 
   if empty_tiles == 0:
@@ -273,17 +267,17 @@ proc get_computer_move(
     best_move = -1
     best_legal_prob = -1.0
 
-  for i in 0..<9:
-    if nn.outputs[i] > highest_prob:
-      highest_prob = nn.outputs[i]
+  for i, output in nn.outputs.pairs:
+    if output > highest_prob:
+      highest_prob = output
       highest_prob_idx = i
 
     if (
       state.board[i] == '.' and
-      (best_move == -1 or nn.outputs[i] > best_legal_prob)
+      (best_move == -1 or output > best_legal_prob)
     ):
       best_move = i
-      best_legal_prob = nn.outputs[i]
+      best_legal_prob = output
 
   # That's just for debugging. It's interesting to show to user
   # in the first iterations of the game, since you can see how initially
@@ -295,7 +289,7 @@ proc get_computer_move(
     for row in 0..<3:
       for col in 0..<3:
         let pos = row * 3 + col
-        echo &"{nn.outputs[pos] * 100.0}"
+        echo &"{(nn.outputs[pos] * 100.0):.3f}"
 
         if pos == highest_prob_idx:
           echo "*"
@@ -310,9 +304,7 @@ proc get_computer_move(
     # Sum of probabilities should be 1.0, hopefully.
     # Just debugging.
 
-    var total_prob = 0.0
-    for i in 0..<9:
-      total_prob += nn.outputs[i]
+    let total_prob = nn.outputs.sum
 
     echo &"Sum of all probabilities: {total_prob}"
 
@@ -535,7 +527,7 @@ proc play_game(nn: NeuralNetworkRef) =
       echo "Computer's move"
       let move = state.get_computer_move(nn, true)
       state.board[move] = 'O'
-      echo &"Computer placed 0 at position {move}\n"
+      echo &"Computer placed O at position {move}\n"
 
       move_history[num_moves] = move
       num_moves.inc
@@ -660,6 +652,7 @@ proc train_against_random(
   echo "\nTraining complete!\n"
 
 when is_main_module:
+
   var random_games = 150_000 # Fast and enough to play in a decent way.
 
   let args = command_line_params()
