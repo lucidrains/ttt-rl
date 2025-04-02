@@ -646,8 +646,11 @@ proc train_against_random(
     else:
       ties.inc
 
+    proc to_percent(num, den: int): float =
+      num.float * 100 / den.float
+
     if (((i + 1) mod 10000) == 0):
-      echo &"Games: {i + 1}, Wins: {wins} ({wins.float * 100 / played_games.float}), Losses: {losses} ({losses.float * 100 / played_games.float}), Ties: {ties} ({ties.float * 100 / played_games.float})"
+      echo &"Games: {i + 1}, Wins: {wins} ({to_percent(wins, played_games):.3f}), Losses: {losses} ({to_percent(losses, played_games):.3f}), Ties: {ties} ({to_percent(ties, played_games):.3f})"
 
       played_games = 0
       wins = 0
