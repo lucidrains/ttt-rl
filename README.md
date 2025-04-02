@@ -30,7 +30,7 @@ Then run with
 The [Nim](https://nim-lang.org/) version can be run with the following
 
 ```bash
-$ nim c -d:release -r ttt_rl.nim
+$ nim c -d:release -t:-ffast-math -r ttt_rl.nim
 ```
 
 By default, the program plays against a random opponent (an opponent just
