@@ -27,6 +27,12 @@ Then run with
 
     ./ttt
 
+The [Nim](https://nim-lang.org/) version can be run with the following
+
+```bash
+$ nim c -d:release -r ttt_rl.nim
+```
+
 By default, the program plays against a random opponent (an opponent just
 throwing random "X" at random places at each move) for 150k games. Then it
 starts a CLI interface to play with the human user. You can specify how many

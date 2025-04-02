@@ -6,7 +6,6 @@ import std / [
   strutils,
   strformat,
   random,
-  options,
   terminal
 ]
 
@@ -36,6 +35,7 @@ type
 
 type
   NeuralNetwork = object
+    # Weights and Biases
     weights_ih: array[NN_INPUT_SIZE * NN_HIDDEN_SIZE, float]
     weights_ho: array[NN_HIDDEN_SIZE * NN_OUTPUT_SIZE, float]
     biases_h: array[NN_HIDDEN_SIZE, float]
@@ -395,16 +395,16 @@ proc learn_from_game(
   num_moves: int,
   nn_moves_even: bool,
   winner: char
-) = 
-  var reward: float
+) =
+
   let nn_symbol = if nn_moves_even: 'O' else: 'X'
 
-  if winner == 'T':
-    reward = 0.3 # Small reward for draw
+  let reward = if winner == 'T':
+    0.3 # Small reward for draw
   elif (winner == nn_symbol):
-    reward = 1.0 # Large reward for win
+    1.0 # Large reward for win
   else:
-    reward = -2.0 # Negative reward for loss
+    -2.0 # Negative reward for loss
 
   let state = GameStateRef()
   var target_probs: array[NN_OUTPUT_SIZE, float]
@@ -490,7 +490,6 @@ proc play_game(nn: NeuralNetworkRef) =
   let state = GameStateRef()
 
   var
-    has_won: bool
     winner: char
     move_history: array[9, int]
     num_moves: int
@@ -591,7 +590,6 @@ proc play_random_game(
   let state = GameStateRef()
 
   var
-    has_won: bool
     winner: char
     move: int
     num_moves = 0
